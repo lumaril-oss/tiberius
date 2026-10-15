@@ -129,6 +129,12 @@ impl Context {
         self.lossy_codepage = lossy;
     }
 
+    pub(crate) fn reset_session(&mut self) {
+        self.transaction_desc = [0; 8];
+        self.last_meta = None;
+        self.alt_metas.clear();
+    }
+
     pub fn transaction_descriptor(&self) -> [u8; 8] {
         self.transaction_desc
     }

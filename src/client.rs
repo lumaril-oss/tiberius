@@ -765,6 +765,59 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         Ok(())
     }
 
+    /// Resets the server session before a connection is reused by a pool.
+    ///
+    /// Sends the TDS `RESETCONNECTION` flag, waits for the server's reset
+    /// acknowledgment, and consumes the complete response. SQL Server resets
+    /// session state to its login defaults, removes temporary objects, and
+    /// rolls back local transactions. The client clears its transaction and
+    /// result metadata when the server acknowledges the reset.
+    ///
+    /// Transaction isolation levels and distributed transactions are not
+    /// guaranteed to reset. Set the required isolation level explicitly after
+    /// this call. Do not pool connections with an active distributed transaction
+    /// or an application role that cannot be reset.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Consume all query results before calling this method. Reset is not a
+    /// recovery mechanism for an interrupted request or an uncertain commit.
+    /// If this method fails or its future is dropped after polling starts, the
+    /// connection is marked unusable and must be dropped, not returned to a pool.
+    pub async fn reset_connection(&mut self) -> crate::Result<()> {
+        self.connection.ensure_not_poisoned()?;
+        let mut guard = ResetGuard(Some(self.connection.command_desync_flag()));
+        self.connection.flush_stream().await?;
+
+        let id = self.connection.context_mut().next_packet_id();
+        let mut header = codec::PacketHeader::batch(id);
+        header.set_status(codec::PacketStatus::ResetConnection);
+        // The reset request must not carry a transaction from the old session.
+        self.connection
+            .send(header, BatchRequest::new("/* reset connection */", [0; 8]))
+            .await?;
+
+        let mut acknowledged = false;
+        let mut done = false;
+        let mut tokens = TokenStream::new(&mut self.connection).try_unfold();
+        while let Some(token) = tokens.try_next().await? {
+            match token {
+                ReceivedToken::EnvChange(codec::TokenEnvChange::ResetConnection) => {
+                    acknowledged = true;
+                }
+                ReceivedToken::Done(token) => done = token.is_final(),
+                _ => (),
+            }
+        }
+        if !acknowledged || !done {
+            return Err(crate::Error::Protocol(
+                "server did not complete the connection reset".into(),
+            ));
+        }
+        guard.0 = None;
+        Ok(())
+    }
+
     /// Closes this database connection explicitly.
     pub async fn close(self) -> crate::Result<()> {
         self.connection.close().await
@@ -2016,3 +2069,18 @@ mod bulk_collation_tests {
         );
     }
 }
+
+// Reset must finish before a pool can reuse the connection, including when an
+// external timeout drops the future while it is reading the reset response.
+struct ResetGuard(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+
+impl Drop for ResetGuard {
+    fn drop(&mut self) {
+        if let Some(flag) = &self.0 {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+#[cfg(test)]
+mod reset_tests;
