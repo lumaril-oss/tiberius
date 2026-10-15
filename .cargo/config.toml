@@ -1,0 +1,5 @@
+[registries]
+lumaril = { index = "sparse+https://crates.lumaril.dev/index/" }
+
+[registry]
+global-credential-providers = ["cargo:token"]
