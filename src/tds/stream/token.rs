@@ -384,6 +384,7 @@ where
                 }
                 self.conn.context_mut().set_packet_size(new_size);
             }
+            TokenEnvChange::ResetConnection => self.conn.context_mut().reset_session(),
             TokenEnvChange::BeginTransaction(desc) => {
                 self.conn.context_mut().set_transaction_descriptor(desc);
             }

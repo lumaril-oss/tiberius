@@ -73,15 +73,10 @@ where
     /// the same connection fails cleanly instead of appending a second message
     /// after a half-sent one and silently desyncing the server.
     poisoned: bool,
-    /// Set when a `command_timeout` fires mid-response. The tail of the
-    /// timed-out response is then still unread on the wire, so the connection is
-    /// out of sync with the server and must not be reused. This handle is shared
-    /// with the token stream's `RoundTripTimeout`, which flips it when its
-    /// deadline elapses; [`ensure_not_poisoned`] rejects every subsequent use so
-    /// a pool discards the connection instead of hanging in `flush_stream` on
-    /// the still-pending previous response.
-    ///
-    /// [`ensure_not_poisoned`]: Self::ensure_not_poisoned
+    /// Set after a command timeout or a failed or canceled connection reset.
+    /// Shared by `RoundTripTimeout` and `ResetGuard`. The client state can no
+    /// longer be trusted to match the server, so `ensure_not_poisoned` rejects
+    /// every subsequent request.
     command_desync: Arc<AtomicBool>,
 }
 
@@ -287,15 +282,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         // completion clears it below. A future dropped mid-loop leaves it set.
         self.poisoned = true;
 
+        let mut reset = header.status() == PacketStatus::ResetConnection;
         while !payload.is_empty() {
             let writable = cmp::min(payload.len(), packet_size);
             let split_payload = payload.split_to(writable);
 
-            if payload.is_empty() {
-                header.set_status(PacketStatus::EndOfMessage);
-            } else {
-                header.set_status(PacketStatus::NormalMessage);
-            }
+            // RESETCONNECTION belongs only to the first packet, including when
+            // that packet also ends the message (MS-TDS 2.2.3.1.2).
+            header.set_status(match (reset, payload.is_empty()) {
+                (true, true) => PacketStatus::ResetConnectionEndOfMessage,
+                (true, false) => PacketStatus::ResetConnection,
+                (false, true) => PacketStatus::EndOfMessage,
+                (false, false) => PacketStatus::NormalMessage,
+            });
+            reset = false;
 
             event!(
                 Level::TRACE,
@@ -325,7 +325,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         }
         if self.command_desync.load(Ordering::Acquire) {
             return Err(crate::Error::Protocol(
-                "connection was left out of sync with the server by a command timeout (the previous response is only partly read) and can no longer be used; open a new connection"
+                "connection was left out of sync with the server by an incomplete command or connection reset and can no longer be used; open a new connection"
                     .into(),
             ));
         }

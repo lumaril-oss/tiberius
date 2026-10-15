@@ -13,7 +13,7 @@ impl Packet {
     }
 
     pub(crate) fn is_last(&self) -> bool {
-        self.header.status() == PacketStatus::EndOfMessage
+        self.header.status() as u8 & PacketStatus::EndOfMessage as u8 != 0
     }
 
     pub(crate) fn into_parts(self) -> (PacketHeader, BytesMut) {
@@ -68,6 +68,14 @@ mod tests {
 
         packet.header.set_status(PacketStatus::EndOfMessage);
         assert!(packet.is_last());
+
+        packet
+            .header
+            .set_status(PacketStatus::ResetConnectionEndOfMessage);
+        let mut bytes = BytesMut::new();
+        packet.encode(&mut bytes).unwrap();
+        assert_eq!(bytes[1], 0x09);
+        assert!(Packet::decode(&mut bytes).unwrap().is_last());
     }
 
     #[test]

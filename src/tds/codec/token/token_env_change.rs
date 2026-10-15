@@ -79,6 +79,7 @@ pub enum TokenEnvChange {
     CommitTransaction,
     RollbackTransaction,
     DefectTransaction,
+    ResetConnection,
     Routing {
         host: String,
         port: u16,
@@ -105,6 +106,7 @@ impl fmt::Display for TokenEnvChange {
             Self::CommitTransaction => write!(f, "Commit transaction"),
             Self::RollbackTransaction => write!(f, "Rollback transaction"),
             Self::DefectTransaction => write!(f, "Defect transaction"),
+            Self::ResetConnection => write!(f, "Reset connection"),
             Self::Routing { host, port } => write!(
                 f,
                 "Server requested routing to a new address: {}:{}",
@@ -226,6 +228,7 @@ impl TokenEnvChange {
             EnvChangeTy::CommitTransaction => TokenEnvChange::CommitTransaction,
             EnvChangeTy::RollbackTransaction => TokenEnvChange::RollbackTransaction,
             EnvChangeTy::DefectTransaction => TokenEnvChange::DefectTransaction,
+            EnvChangeTy::ResetConnection => TokenEnvChange::ResetConnection,
 
             EnvChangeTy::Routing => {
                 buf.read_u16::<LittleEndian>()?; // routing data value length

@@ -1,5 +1,11 @@
 # Changes
 
+## Unreleased
+
+- Add `Client::reset_connection` for pooled connections. It sends the TDS reset
+  flag, waits for the reset acknowledgment and complete response, and rejects
+  reuse after reset failure or cancellation.
+
 ## Version 0.13.0
 
 - feat: TLS trust configuration is revamped around two orthogonal axes plus a
